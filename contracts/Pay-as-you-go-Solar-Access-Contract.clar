@@ -370,23 +370,30 @@
     )
     (let (
             (subscription-id (var-get next-subscription-id))
-            (system (unwrap! (map-get? solar-systems { system-id: system-id }) err-not-found))
+            (system (unwrap! (map-get? solar-systems { system-id: system-id })
+                err-not-found
+            ))
             (user-account (unwrap! (map-get? user-accounts { user: tx-sender }) err-not-found))
             (monthly-payment (* monthly-kwh (get rate-per-kwh system)))
-            (user-subs (default-to { active-subscriptions: (list), total-subscriptions: u0 }
+            (user-subs (default-to {
+                active-subscriptions: (list),
+                total-subscriptions: u0,
+            }
                 (map-get? user-subscriptions { user: tx-sender })
             ))
         )
         (asserts! (get active system) err-inactive-system)
         (asserts! (> monthly-kwh u0) err-invalid-amount)
-        (asserts! (>= (get balance user-account) monthly-payment) err-insufficient-payment)
-        
+        (asserts! (>= (get balance user-account) monthly-payment)
+            err-insufficient-payment
+        )
+
         (try! (stx-transfer? monthly-payment tx-sender (as-contract tx-sender)))
-        
+
         (map-set user-accounts { user: tx-sender }
             (merge user-account { balance: (- (get balance user-account) monthly-payment) })
         )
-        
+
         (map-set energy-subscriptions { subscription-id: subscription-id } {
             user: tx-sender,
             system-id: system-id,
@@ -397,20 +404,26 @@
             active: true,
             auto-renew: auto-renew,
         })
-        
+
         (map-set solar-systems { system-id: system-id }
             (merge system { total-payments-received: (+ (get total-payments-received system) monthly-payment) })
         )
-        
+
         (map-set user-subscriptions { user: tx-sender }
             (merge user-subs {
-                active-subscriptions: (unwrap! (as-max-len? 
-                    (append (get active-subscriptions user-subs) subscription-id) u10
-                ) err-invalid-amount),
+                active-subscriptions: (unwrap!
+                    (as-max-len?
+                        (append (get active-subscriptions user-subs)
+                            subscription-id
+                        )
+                        u10
+                    )
+                    err-invalid-amount
+                ),
                 total-subscriptions: (+ (get total-subscriptions user-subs) u1),
             })
         )
-        
+
         (var-set next-subscription-id (+ subscription-id u1))
         (ok subscription-id)
     )
@@ -418,53 +431,71 @@
 
 (define-public (renew-subscription (subscription-id uint))
     (let (
-            (subscription (unwrap! (map-get? energy-subscriptions { subscription-id: subscription-id })
+            (subscription (unwrap!
+                (map-get? energy-subscriptions { subscription-id: subscription-id })
                 err-subscription-not-found
             ))
-            (user-account (unwrap! (map-get? user-accounts { user: (get user subscription) }) err-not-found))
+            (user-account (unwrap! (map-get? user-accounts { user: (get user subscription) })
+                err-not-found
+            ))
             (blocks-since-renewal (- stacks-block-height (get last-renewal-block subscription)))
         )
         (asserts! (get active subscription) err-subscription-expired)
         (asserts! (>= blocks-since-renewal u4320) err-invalid-amount)
-        (asserts! (or (is-eq tx-sender (get user subscription)) (get auto-renew subscription)) err-unauthorized)
-        (asserts! (>= (get balance user-account) (get monthly-payment subscription)) err-insufficient-payment)
-        
-        (try! (stx-transfer? (get monthly-payment subscription) (get user subscription) (as-contract tx-sender)))
-        
+        (asserts!
+            (or (is-eq tx-sender (get user subscription)) (get auto-renew subscription))
+            err-unauthorized
+        )
+        (asserts!
+            (>= (get balance user-account) (get monthly-payment subscription))
+            err-insufficient-payment
+        )
+
+        (try! (stx-transfer? (get monthly-payment subscription) (get user subscription)
+            (as-contract tx-sender)
+        ))
+
         (map-set user-accounts { user: (get user subscription) }
-            (merge user-account { 
+            (merge user-account {
                 balance: (- (get balance user-account) (get monthly-payment subscription)),
                 total-usage: (+ (get total-usage user-account) (get monthly-kwh subscription)),
             })
         )
-        
-        (let ((system (unwrap! (map-get? solar-systems { system-id: (get system-id subscription) }) err-not-found)))
+
+        (let ((system (unwrap!
+                (map-get? solar-systems { system-id: (get system-id subscription) })
+                err-not-found
+            )))
             (map-set solar-systems { system-id: (get system-id subscription) }
-                (merge system { total-payments-received: (+ (get total-payments-received system) (get monthly-payment subscription)) })
-            )
+                (merge system { total-payments-received: (+ (get total-payments-received system)
+                    (get monthly-payment subscription)
+                ) }
+                ))
         )
-        
+
         (map-set energy-subscriptions { subscription-id: subscription-id }
             (merge subscription { last-renewal-block: stacks-block-height })
         )
-        
+
         (ok true)
     )
 )
 
 (define-public (cancel-subscription (subscription-id uint))
-    (let (
-            (subscription (unwrap! (map-get? energy-subscriptions { subscription-id: subscription-id })
-                err-subscription-not-found
-            ))
-        )
+    (let ((subscription (unwrap!
+            (map-get? energy-subscriptions { subscription-id: subscription-id })
+            err-subscription-not-found
+        )))
         (asserts! (is-eq tx-sender (get user subscription)) err-unauthorized)
         (asserts! (get active subscription) err-subscription-expired)
-        
+
         (map-set energy-subscriptions { subscription-id: subscription-id }
-            (merge subscription { active: false, auto-renew: false })
+            (merge subscription {
+                active: false,
+                auto-renew: false,
+            })
         )
-        
+
         (ok true)
     )
 )
@@ -473,18 +504,17 @@
         (subscription-id uint)
         (auto-renew bool)
     )
-    (let (
-            (subscription (unwrap! (map-get? energy-subscriptions { subscription-id: subscription-id })
-                err-subscription-not-found
-            ))
-        )
+    (let ((subscription (unwrap!
+            (map-get? energy-subscriptions { subscription-id: subscription-id })
+            err-subscription-not-found
+        )))
         (asserts! (is-eq tx-sender (get user subscription)) err-unauthorized)
         (asserts! (get active subscription) err-subscription-expired)
-        
+
         (map-set energy-subscriptions { subscription-id: subscription-id }
             (merge subscription { auto-renew: auto-renew })
         )
-        
+
         (ok auto-renew)
     )
 )
@@ -504,7 +534,10 @@
                 active: (get active subscription),
                 needs-renewal: (and (get active subscription) (>= blocks-since-renewal u4320)),
                 auto-renew: (get auto-renew subscription),
-                blocks-until-expiry: (if (< blocks-since-renewal u4320) (- u4320 blocks-since-renewal) u0),
+                blocks-until-expiry: (if (< blocks-since-renewal u4320)
+                    (- u4320 blocks-since-renewal)
+                    u0
+                ),
                 monthly-kwh: (get monthly-kwh subscription),
                 monthly-payment: (get monthly-payment subscription),
             })
@@ -514,22 +547,30 @@
 )
 
 (define-read-only (get-active-subscription-energy (user principal))
-    (let (
-            (user-subs (default-to { active-subscriptions: (list), total-subscriptions: u0 }
-                (map-get? user-subscriptions { user: user })
-            ))
+    (let ((user-subs (default-to {
+            active-subscriptions: (list),
+            total-subscriptions: u0,
+        }
+            (map-get? user-subscriptions { user: user })
+        )))
+        (fold +
+            (map get-subscription-energy (get active-subscriptions user-subs))
+            u0
         )
-        (fold + (map get-subscription-energy (get active-subscriptions user-subs)) u0)
     )
 )
 
 (define-private (get-subscription-energy (subscription-id uint))
     (match (map-get? energy-subscriptions { subscription-id: subscription-id })
-        subscription (if (and (get active subscription) 
-                             (< (- stacks-block-height (get last-renewal-block subscription)) u4320))
-                        (get monthly-kwh subscription)
-                        u0
-                     )
+        subscription (if (and
+                (get active subscription)
+                (< (- stacks-block-height (get last-renewal-block subscription))
+                    u4320
+                )
+            )
+            (get monthly-kwh subscription)
+            u0
+        )
         u0
     )
 )
