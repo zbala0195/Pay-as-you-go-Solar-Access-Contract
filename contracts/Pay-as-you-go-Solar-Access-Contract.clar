@@ -9,10 +9,13 @@
 (define-constant err-subscription-not-found (err u107))
 (define-constant err-subscription-expired (err u108))
 (define-constant err-subscription-exists (err u109))
+(define-constant err-invalid-tier (err u110))
+(define-constant err-pricing-not-found (err u111))
 
 (define-data-var next-system-id uint u1)
 (define-data-var contract-fee uint u1000)
 (define-data-var next-subscription-id uint u1)
+(define-data-var demand-multiplier uint u100)
 
 (define-map solar-systems
     { system-id: uint }
@@ -83,6 +86,31 @@
     }
 )
 
+(define-map system-pricing
+    { system-id: uint }
+    {
+        tier-1-rate: uint,
+        tier-2-rate: uint,
+        tier-3-rate: uint,
+        tier-1-threshold: uint,
+        tier-2-threshold: uint,
+        current-demand: uint,
+        peak-hours-multiplier: uint,
+        off-peak-hours-multiplier: uint,
+        dynamic-pricing-enabled: bool,
+    }
+)
+
+(define-map system-demand-stats
+    { system-id: uint }
+    {
+        daily-requests: uint,
+        peak-demand-block: uint,
+        total-energy-requested: uint,
+        last-update-block: uint,
+    }
+)
+
 (define-data-var next-payment-id uint u1)
 
 (define-public (register-solar-system
@@ -103,6 +131,23 @@
             total-payments-received: u0,
         })
         (var-set next-system-id (+ system-id u1))
+        (map-set system-pricing { system-id: system-id } {
+            tier-1-rate: rate-per-kwh,
+            tier-2-rate: (* rate-per-kwh u120),
+            tier-3-rate: (* rate-per-kwh u150),
+            tier-1-threshold: u100,
+            tier-2-threshold: u500,
+            current-demand: u0,
+            peak-hours-multiplier: u130,
+            off-peak-hours-multiplier: u80,
+            dynamic-pricing-enabled: false,
+        })
+        (map-set system-demand-stats { system-id: system-id } {
+            daily-requests: u0,
+            peak-demand-block: u0,
+            total-energy-requested: u0,
+            last-update-block: stacks-block-height,
+        })
         (ok system-id)
     )
 )
@@ -140,7 +185,10 @@
                 err-not-found
             ))
             (user-account (unwrap! (map-get? user-accounts { user: tx-sender }) err-not-found))
-            (cost (* energy-kwh (get rate-per-kwh system)))
+            (dynamic-rate (calculate-dynamic-rate system-id energy-kwh
+                (get rate-per-kwh system)
+            ))
+            (cost (* energy-kwh dynamic-rate))
             (payment-id (var-get next-payment-id))
         )
         (asserts! (get active system) err-inactive-system)
@@ -184,6 +232,7 @@
         })
 
         (var-set next-payment-id (+ payment-id u1))
+        (try! (update-demand-stats system-id energy-kwh))
         (ok payment-id)
     )
 )
@@ -234,6 +283,172 @@
         (ok (get total-energy-generated
             (merge system { total-energy-generated: (+ (get total-energy-generated system) energy-kwh) })
         ))
+    )
+)
+
+(define-public (configure-dynamic-pricing
+        (system-id uint)
+        (tier-1-rate uint)
+        (tier-2-rate uint)
+        (tier-3-rate uint)
+        (tier-1-threshold uint)
+        (tier-2-threshold uint)
+        (peak-multiplier uint)
+        (off-peak-multiplier uint)
+        (enable-dynamic bool)
+    )
+    (let ((system (unwrap! (map-get? solar-systems { system-id: system-id }) err-not-found)))
+        (asserts! (is-eq tx-sender (get owner system)) err-unauthorized)
+        (asserts! (> tier-1-rate u0) err-invalid-amount)
+        (asserts! (> tier-2-rate u0) err-invalid-amount)
+        (asserts! (> tier-3-rate u0) err-invalid-amount)
+        (asserts! (> tier-1-threshold u0) err-invalid-amount)
+        (asserts! (> tier-2-threshold tier-1-threshold) err-invalid-amount)
+        (map-set system-pricing { system-id: system-id } {
+            tier-1-rate: tier-1-rate,
+            tier-2-rate: tier-2-rate,
+            tier-3-rate: tier-3-rate,
+            tier-1-threshold: tier-1-threshold,
+            tier-2-threshold: tier-2-threshold,
+            current-demand: (default-to u0
+                (get current-demand
+                    (map-get? system-pricing { system-id: system-id })
+                )),
+            peak-hours-multiplier: peak-multiplier,
+            off-peak-hours-multiplier: off-peak-multiplier,
+            dynamic-pricing-enabled: enable-dynamic,
+        })
+        (ok true)
+    )
+)
+
+(define-public (update-demand-stats
+        (system-id uint)
+        (energy-requested uint)
+    )
+    (let (
+            (system (unwrap! (map-get? solar-systems { system-id: system-id })
+                err-not-found
+            ))
+            (current-stats (default-to {
+                daily-requests: u0,
+                peak-demand-block: u0,
+                total-energy-requested: u0,
+                last-update-block: stacks-block-height,
+            }
+                (map-get? system-demand-stats { system-id: system-id })
+            ))
+            (pricing (default-to {
+                tier-1-rate: (get rate-per-kwh system),
+                tier-2-rate: (* (get rate-per-kwh system) u120),
+                tier-3-rate: (* (get rate-per-kwh system) u150),
+                tier-1-threshold: u100,
+                tier-2-threshold: u500,
+                current-demand: u0,
+                peak-hours-multiplier: u130,
+                off-peak-hours-multiplier: u80,
+                dynamic-pricing-enabled: false,
+            }
+                (map-get? system-pricing { system-id: system-id })
+            ))
+        )
+        (asserts! (get active system) err-inactive-system)
+        (map-set system-demand-stats { system-id: system-id }
+            (merge current-stats {
+                daily-requests: (+ (get daily-requests current-stats) u1),
+                total-energy-requested: (+ (get total-energy-requested current-stats) energy-requested),
+                last-update-block: stacks-block-height,
+            })
+        )
+        (map-set system-pricing { system-id: system-id }
+            (merge pricing { current-demand: (+ (get current-demand pricing) energy-requested) })
+        )
+        (ok true)
+    )
+)
+
+(define-private (calculate-dynamic-rate
+        (system-id uint)
+        (energy-kwh uint)
+        (base-rate uint)
+    )
+    (let (
+            (pricing (map-get? system-pricing { system-id: system-id }))
+            (current-block stacks-block-height)
+        )
+        (match pricing
+            pricing-data (if (get dynamic-pricing-enabled pricing-data)
+                (let (
+                        (tier-rate (get-tier-rate pricing-data
+                            (get current-demand pricing-data)
+                        ))
+                        (time-multiplier (get-time-multiplier pricing-data current-block))
+                        (demand-factor (get-demand-factor (get current-demand pricing-data)))
+                    )
+                    (/ (* (* tier-rate time-multiplier) demand-factor) u10000)
+                )
+                base-rate
+            )
+            base-rate
+        )
+    )
+)
+
+(define-private (get-tier-rate
+        (pricing-data {
+            tier-1-rate: uint,
+            tier-2-rate: uint,
+            tier-3-rate: uint,
+            tier-1-threshold: uint,
+            tier-2-threshold: uint,
+            current-demand: uint,
+            peak-hours-multiplier: uint,
+            off-peak-hours-multiplier: uint,
+            dynamic-pricing-enabled: bool,
+        })
+        (demand uint)
+    )
+    (if (<= demand (get tier-1-threshold pricing-data))
+        (get tier-1-rate pricing-data)
+        (if (<= demand (get tier-2-threshold pricing-data))
+            (get tier-2-rate pricing-data)
+            (get tier-3-rate pricing-data)
+        )
+    )
+)
+
+(define-private (get-time-multiplier
+        (pricing-data {
+            tier-1-rate: uint,
+            tier-2-rate: uint,
+            tier-3-rate: uint,
+            tier-1-threshold: uint,
+            tier-2-threshold: uint,
+            current-demand: uint,
+            peak-hours-multiplier: uint,
+            off-peak-hours-multiplier: uint,
+            dynamic-pricing-enabled: bool,
+        })
+        (current-block uint)
+    )
+    (let ((hour-equivalent (mod current-block u144)))
+        (if (or (< hour-equivalent u36) (> hour-equivalent u108))
+            (get peak-hours-multiplier pricing-data)
+            (get off-peak-hours-multiplier pricing-data)
+        )
+    )
+)
+
+(define-private (get-demand-factor (demand uint))
+    (if (<= demand u100)
+        u100
+        (if (<= demand u500)
+            u110
+            (if (<= demand u1000)
+                u125
+                u140
+            )
+        )
     )
 )
 
@@ -374,7 +589,10 @@
                 err-not-found
             ))
             (user-account (unwrap! (map-get? user-accounts { user: tx-sender }) err-not-found))
-            (monthly-payment (* monthly-kwh (get rate-per-kwh system)))
+            (dynamic-rate (calculate-dynamic-rate system-id monthly-kwh
+                (get rate-per-kwh system)
+            ))
+            (monthly-payment (* monthly-kwh dynamic-rate))
             (user-subs (default-to {
                 active-subscriptions: (list),
                 total-subscriptions: u0,
@@ -577,4 +795,46 @@
 
 (define-read-only (get-total-systems)
     (- (var-get next-system-id) u1)
+)
+
+(define-read-only (get-system-pricing (system-id uint))
+    (map-get? system-pricing { system-id: system-id })
+)
+
+(define-read-only (get-system-demand-stats (system-id uint))
+    (map-get? system-demand-stats { system-id: system-id })
+)
+
+(define-read-only (get-current-dynamic-rate
+        (system-id uint)
+        (energy-kwh uint)
+    )
+    (let ((system (unwrap! (map-get? solar-systems { system-id: system-id }) err-not-found)))
+        (ok (calculate-dynamic-rate system-id energy-kwh (get rate-per-kwh system)))
+    )
+)
+
+(define-read-only (get-pricing-tier (system-id uint))
+    (match (map-get? system-pricing { system-id: system-id })
+        pricing-data (let ((demand (get current-demand pricing-data)))
+            (ok (if (<= demand (get tier-1-threshold pricing-data))
+                u1
+                (if (<= demand (get tier-2-threshold pricing-data))
+                    u2
+                    u3
+                )
+            ))
+        )
+        err-pricing-not-found
+    )
+)
+
+(define-read-only (is-peak-hours (current-block uint))
+    (let ((hour-equivalent (mod current-block u144)))
+        (or (< hour-equivalent u36) (> hour-equivalent u108))
+    )
+)
+
+(define-read-only (get-global-demand-multiplier)
+    (var-get demand-multiplier)
 )
