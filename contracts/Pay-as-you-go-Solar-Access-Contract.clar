@@ -176,6 +176,33 @@
     )
 )
 
+(define-public (transfer-user-balance
+        (recipient principal)
+        (amount uint)
+    )
+    (let (
+            (sender-account (unwrap! (map-get? user-accounts { user: tx-sender }) err-not-found))
+            (recipient-account (unwrap! (map-get? user-accounts { user: recipient }) err-not-found))
+            (new-sender-balance (- (get balance sender-account) amount))
+            (new-recipient-balance (+ (get balance recipient-account) amount))
+        )
+        (asserts! (> amount u0) err-invalid-amount)
+        (asserts! (>= (get balance sender-account) amount)
+            err-insufficient-payment
+        )
+        (map-set user-accounts { user: tx-sender }
+            (merge sender-account { balance: new-sender-balance })
+        )
+        (map-set user-accounts { user: recipient }
+            (merge recipient-account { balance: new-recipient-balance })
+        )
+        (ok {
+            sender-balance: new-sender-balance,
+            recipient-balance: new-recipient-balance,
+        })
+    )
+)
+
 (define-public (pay-for-energy
         (system-id uint)
         (energy-kwh uint)

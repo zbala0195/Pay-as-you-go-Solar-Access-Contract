@@ -110,7 +110,9 @@
         (asserts! (> threshold-amount u0) err-invalid-amount)
         (asserts! (> reward-amount u0) err-invalid-amount)
         (asserts! (> max-claimants u0) err-invalid-amount)
-        (asserts! (>= (var-get reward-pool) (* reward-amount max-claimants)) err-insufficient-balance)
+        (asserts! (>= (var-get reward-pool) (* reward-amount max-claimants))
+            err-insufficient-balance
+        )
         (map-set milestone-configs { milestone-id: milestone-id } {
             threshold-amount: threshold-amount,
             reward-amount: reward-amount,
@@ -124,7 +126,10 @@
     )
 )
 
-(define-public (record-payment (user principal) (amount uint))
+(define-public (record-payment
+        (user principal)
+        (amount uint)
+    )
     (let (
             (current-progress (default-to {
                 total-payments: u0,
@@ -176,7 +181,9 @@
 
 (define-public (claim-milestone-reward (milestone-id uint))
     (let (
-            (milestone (unwrap! (map-get? milestone-configs { milestone-id: milestone-id }) err-not-found))
+            (milestone (unwrap! (map-get? milestone-configs { milestone-id: milestone-id })
+                err-not-found
+            ))
             (user-data (unwrap! (map-get? user-progress { user: tx-sender }) err-not-found))
             (existing-claim (map-get? milestone-claims {
                 user: tx-sender,
@@ -194,10 +201,18 @@
             (final-reward (/ (* (get reward-amount milestone) streak-multiplier) u100))
         )
         (asserts! (get active milestone) err-milestone-not-active)
-        (asserts! (>= (get total-payments user-data) (get threshold-amount milestone)) err-threshold-not-met)
-        (asserts! (< (get total-claimants milestone) (get max-claimants milestone)) err-insufficient-balance)
+        (asserts!
+            (>= (get total-payments user-data) (get threshold-amount milestone))
+            err-threshold-not-met
+        )
+        (asserts!
+            (< (get total-claimants milestone) (get max-claimants milestone))
+            err-insufficient-balance
+        )
         (asserts! (is-none existing-claim) err-reward-already-claimed)
-        (asserts! (>= (var-get reward-pool) final-reward) err-insufficient-balance)
+        (asserts! (>= (var-get reward-pool) final-reward)
+            err-insufficient-balance
+        )
         (try! (as-contract (stx-transfer? final-reward tx-sender tx-sender)))
         (map-set milestone-claims {
             user: tx-sender,
@@ -223,7 +238,9 @@
             })
         )
         (var-set reward-pool (- (var-get reward-pool) final-reward))
-        (var-set total-rewards-distributed (+ (var-get total-rewards-distributed) final-reward))
+        (var-set total-rewards-distributed
+            (+ (var-get total-rewards-distributed) final-reward)
+        )
         (ok final-reward)
     )
 )
@@ -232,7 +249,9 @@
         (milestone-id uint)
         (active bool)
     )
-    (let ((milestone (unwrap! (map-get? milestone-configs { milestone-id: milestone-id }) err-not-found)))
+    (let ((milestone (unwrap! (map-get? milestone-configs { milestone-id: milestone-id })
+            err-not-found
+        )))
         (asserts! (is-eq tx-sender contract-owner) err-owner-only)
         (map-set milestone-configs { milestone-id: milestone-id }
             (merge milestone { active: active })
@@ -247,15 +266,17 @@
             (bonus-amount (calculate-streak-bonus (get current-streak user-streak)))
         )
         (asserts! (> bonus-amount u0) err-threshold-not-met)
-        (asserts! (>= (var-get reward-pool) bonus-amount) err-insufficient-balance)
+        (asserts! (>= (var-get reward-pool) bonus-amount)
+            err-insufficient-balance
+        )
         (try! (as-contract (stx-transfer? bonus-amount tx-sender tx-sender)))
         (map-set user-streaks { user: tx-sender }
-            (merge user-streak {
-                streak-bonus-earned: (+ (get streak-bonus-earned user-streak) bonus-amount),
-            })
+            (merge user-streak { streak-bonus-earned: (+ (get streak-bonus-earned user-streak) bonus-amount) })
         )
         (var-set reward-pool (- (var-get reward-pool) bonus-amount))
-        (var-set total-rewards-distributed (+ (var-get total-rewards-distributed) bonus-amount))
+        (var-set total-rewards-distributed
+            (+ (var-get total-rewards-distributed) bonus-amount)
+        )
         (ok bonus-amount)
     )
 )
@@ -330,14 +351,22 @@
                 user-progress-data (ok {
                     eligible: (and
                         (get active milestone-data)
-                        (>= (get total-payments user-progress-data) (get threshold-amount milestone-data))
-                        (< (get total-claimants milestone-data) (get max-claimants milestone-data))
+                        (>= (get total-payments user-progress-data)
+                            (get threshold-amount milestone-data)
+                        )
+                        (< (get total-claimants milestone-data)
+                            (get max-claimants milestone-data)
+                        )
                         (is-none existing-claim)
                     ),
-                    threshold-met: (>= (get total-payments user-progress-data) (get threshold-amount milestone-data)),
+                    threshold-met: (>= (get total-payments user-progress-data)
+                        (get threshold-amount milestone-data)
+                    ),
                     already-claimed: (is-some existing-claim),
                     milestone-active: (get active milestone-data),
-                    slots-available: (< (get total-claimants milestone-data) (get max-claimants milestone-data)),
+                    slots-available: (< (get total-claimants milestone-data)
+                        (get max-claimants milestone-data)
+                    ),
                 })
                 err-not-found
             )
